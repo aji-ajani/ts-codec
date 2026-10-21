@@ -50,7 +50,7 @@ function isStatementPure(stmt: Statement): boolean {
 }
 
 function convertElseBranch(stmt: Statement | undefined, scope: Scope): string | null {
-    if (stmt === undefined) return "done"; // no else clause
+    if (stmt === undefined) return "pass"; // no else clause
 
     if (Node.isIfStatement(stmt)) return convertIfStatement(stmt, scope); // else if
 
@@ -80,7 +80,7 @@ function convertIfStatement(stmt: IfStatement, scope: Scope): string | null {
 }
 
 function convertBlockStatements(statements: Statement[], index: number, scope: Scope): string | null {
-    if (index === statements.length) return "done"; // ran out of statements — no explicit return
+    if (index === statements.length) return "pass"; // ran out of statements — no explicit return
 
     const stmt = statements[index];
 
@@ -90,7 +90,7 @@ function convertBlockStatements(statements: Statement[], index: number, scope: S
         // is provably unreachable, dropped here rather than converted, regardless of what (if
         // anything) follows in `statements`.
         const returnExpr = stmt.getExpression();
-        if (returnExpr === undefined) return "(return done)"; // bare `return;`
+        if (returnExpr === undefined) return "(return pass)"; // bare `return;`
 
         const value = convert(returnExpr, scope);
         if (value === null) return null;

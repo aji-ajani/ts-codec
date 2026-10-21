@@ -142,24 +142,24 @@ test("block body with multi-declarator const returns null", () => {
     );
 });
 
-test("empty block body encodes as done", () => {
+test("empty block body encodes as pass", () => {
     assert.equal(
         convert(parseExpr("() => {}"), noScope),
-        "(lam0 done)"
+        "(lam0 pass)"
     );
 });
 
-test("block body with no return statement encodes with done as the tail", () => {
+test("block body with no return statement encodes with pass as the tail", () => {
     assert.equal(
         convert(parseExpr("(x) => { const a = x; }"), noScope),
-        "(lam1 (define $0 done))"
+        "(lam1 (define $0 pass))"
     );
 });
 
-test("block body with bare return (no value) encodes as (return done)", () => {
+test("block body with bare return (no value) encodes as (return pass)", () => {
     assert.equal(
         convert(parseExpr("(x) => { const a = 1; return; }"), noScope),
-        "(lam1 (define 1 (return done)))"
+        "(lam1 (define 1 (return pass)))"
     );
 });
 
@@ -212,10 +212,10 @@ test("block body mixing define and seq", () => {
     );
 });
 
-test("block body with bare expression statement and no return encodes with done", () => {
+test("block body with bare expression statement and no return encodes with pass", () => {
     assert.equal(
         convert(parseExpr("(x) => { x > 0; }"), noScope),
-        "(lam1 (seq (num_gt $0 0) done))"
+        "(lam1 (seq (num_gt $0 0) pass))"
     );
 });
 
@@ -756,17 +756,17 @@ test("if/else as the last statement of a block, both branches returning, sits di
     );
 });
 
-test("terminal guard clause with no else — else child is done", () => {
+test("terminal guard clause with no else — else child is pass", () => {
     assert.equal(
         convert(parseExpr("(x) => { if (x < 0) { return 0; } }"), noScope),
-        "(lam1 (if (num_lt $0 0) (return 0) done))"
+        "(lam1 (if (num_lt $0 0) (return 0) pass))"
     );
 });
 
-test("if with no else, more code follows — else child is done, rest is seq's second child", () => {
+test("if with no else, more code follows — else child is pass, rest is seq's second child", () => {
     assert.equal(
         convert(parseExpr("(x) => { if (x > 0) { x * 2; } x + 1; }"), noScope),
-        "(lam1 (seq (if (num_gt $0 0) (seq (num_mul $0 2) done) done) (seq (num_add $0 1) done)))"
+        "(lam1 (seq (if (num_gt $0 0) (seq (num_mul $0 2) pass) pass) (seq (num_add $0 1) pass)))"
     );
 });
 
@@ -780,14 +780,14 @@ test("else if chains to a nested if with no extra operator", () => {
 test("if condition of plain boolean type (not a comparison) is accepted", () => {
     assert.equal(
         convert(parseExpr("(x: boolean) => { if (x) { return 1; } return 0; }"), noScope),
-        "(lam1 (seq (if $0 (return 1) done) (return 0)))"
+        "(lam1 (seq (if $0 (return 1) pass) (return 0)))"
     );
 });
 
 test("if condition with a literal boolean is accepted", () => {
     assert.equal(
         convert(parseExpr("(x) => { if (true) { return 1; } return 0; }"), noScope),
-        "(lam1 (seq (if true (return 1) done) (return 0)))"
+        "(lam1 (seq (if true (return 1) pass) (return 0)))"
     );
 });
 
@@ -829,7 +829,7 @@ test("while-loop still returns null (for/while remain unsupported)", () => {
 test("dead code after a nested return inside an if-branch does not affect purity", () => {
     assert.equal(
         convert(parseExpr('(x) => { if (x > 0) { return 1; console.log("dead"); } return 0; }'), noScope),
-        "(lam1 (seq (if (num_gt $0 0) (return 1) done) (return 0)))"
+        "(lam1 (seq (if (num_gt $0 0) (return 1) pass) (return 0)))"
     );
 });
 
@@ -844,14 +844,14 @@ test("impurity that runs before a return inside an if-branch is still rejected",
 test("file with const and expression statements encodes with no lam wrapper", () => {
     assert.equal(
         convertProgram(parseFile("const a = 1;\na + 2;")),
-        "(define 1 (seq (num_add $0 2) done))"
+        "(define 1 (seq (num_add $0 2) pass))"
     );
 });
 
-test("empty file encodes as bare done", () => {
+test("empty file encodes as bare pass", () => {
     assert.equal(
         convertProgram(parseFile("")),
-        "done"
+        "pass"
     );
 });
 
@@ -886,35 +886,35 @@ test("file with a top-level enum declaration returns null", () => {
 test("export const is still recognized as a VariableStatement", () => {
     assert.equal(
         convertProgram(parseFile("export const x = 1;\nx + 1;")),
-        "(define 1 (seq (num_add $0 1) done))"
+        "(define 1 (seq (num_add $0 1) pass))"
     );
 });
 
 test("file with a leading import statement skips it transparently", () => {
     assert.equal(
         convertProgram(parseFile('import {foo} from "./foo";\nconst a = 1;\na + 2;')),
-        "(define 1 (seq (num_add $0 2) done))"
+        "(define 1 (seq (num_add $0 2) pass))"
     );
 });
 
 test("interleaved type and interface declarations are skipped transparently", () => {
     assert.equal(
         convertProgram(parseFile("type Foo = number;\nconst a: Foo = 1;\ninterface Bar { x: number }\na + 1;")),
-        "(define 1 (seq (num_add $0 1) done))"
+        "(define 1 (seq (num_add $0 1) pass))"
     );
 });
 
 test("export declaration (re-export) is skipped transparently", () => {
     assert.equal(
         convertProgram(parseFile('const a = 1;\nexport {a};\na + 1;')),
-        "(define 1 (seq (num_add $0 1) done))"
+        "(define 1 (seq (num_add $0 1) pass))"
     );
 });
 
 test("export default is encoded as seq, not terminal — later statements still convert", () => {
     assert.equal(
         convertProgram(parseFile("const a = 1;\nexport default a + 1;\na + 2;")),
-        "(define 1 (seq (num_add $0 1) (seq (num_add $0 2) done)))"
+        "(define 1 (seq (num_add $0 1) (seq (num_add $0 2) pass)))"
     );
 });
 
@@ -923,7 +923,7 @@ test("export default is encoded as seq, not terminal — later statements still 
 test("file-level call composes with define/seq sequencing", () => {
     assert.equal(
         convertProgram(parseFile("const f = (x: number) => x;\nf(1);")),
-        "(define (lam1 $0) (seq (app $0 1) done))"
+        "(define (lam1 $0) (seq (app $0 1) pass))"
     );
 });
 
