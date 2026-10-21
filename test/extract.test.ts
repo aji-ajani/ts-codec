@@ -952,3 +952,67 @@ test("arity-2 lambda using only its last parameter yields $0", () => {
         "(lam2 (num_mul $0 2))"
     );
 });
+
+// Non-identifier parameter shapes
+test("object destructuring parameter returns null", () => {
+    assert.equal(convert(parseExpr("({a, b}) => a - b"), noScope), null);
+});
+
+test("array destructuring parameter returns null", () => {
+    assert.equal(convert(parseExpr("([a, b]) => a - b"), noScope), null);
+});
+
+test("renamed destructuring parameter returns null", () => {
+    assert.equal(convert(parseExpr("({a: x, b: y}) => x - y"), noScope), null);
+});
+
+test("destructured first parameter beside a plain one returns null, not a half-bound term", () => {
+    assert.equal(convert(parseExpr("({a, b}, c) => a - c"), noScope), null);
+});
+
+test("destructured last parameter beside a plain one returns null", () => {
+    assert.equal(convert(parseExpr("(c, {a}) => c - a"), noScope), null);
+});
+
+test("rest parameter returns null", () => {
+    assert.equal(convert(parseExpr("(...rest) => rest"), noScope), null);
+});
+
+test("rest parameter after a plain one returns null", () => {
+    assert.equal(convert(parseExpr("(a, ...rest) => a"), noScope), null);
+});
+
+test("defaulted parameters return null", () => {
+    assert.equal(convert(parseExpr("(a = 1, b = 2) => a - b"), noScope), null);
+});
+
+test("one defaulted parameter among plain ones returns null", () => {
+    assert.equal(convert(parseExpr("(a, b = 2) => a - b"), noScope), null);
+});
+
+test("destructured parameter with a default returns null", () => {
+    assert.equal(convert(parseExpr("({a} = {}) => a"), noScope), null);
+});
+
+test("block-body closure with a destructuring parameter returns null", () => {
+    assert.equal(convert(parseExpr("({a}) => { return a; }"), noScope), null);
+});
+
+test("non-plain parameter on an inner closure nulls the whole outer closure", () => {
+    assert.equal(convert(parseExpr("(f) => f(({a}) => a)"), noScope), null);
+});
+
+test("top-level closure with a destructuring parameter nulls the file", () => {
+    assert.equal(convertProgram(parseFile("const g = ({a}) => a;\ng;")), null);
+});
+
+test("optional parameters are still plain binders", () => {
+    assert.equal(
+        convert(parseExpr("(a?: number, b?: number) => a - b"), noScope),
+        "(lam2 (num_sub $1 $0))"
+    );
+});
+
+test("zero-parameter closure is unaffected by the parameter guard", () => {
+    assert.equal(convert(parseExpr("() => 1 - 2"), noScope), "(lam0 (num_sub 1 2))");
+});

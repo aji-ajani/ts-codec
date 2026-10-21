@@ -1,4 +1,4 @@
-import {Node, SyntaxKind, Statement, VariableDeclarationKind, SourceFile, IfStatement} from "ts-morph"
+import {Node, SyntaxKind, Statement, VariableDeclarationKind, SourceFile, IfStatement, ParameterDeclaration} from "ts-morph"
 import {Scope, lookup, pushParams} from "./scope"
 import {isPure} from "./purity"
 
@@ -21,6 +21,13 @@ function isArrayLikeReceiver(type: ReturnType<Node["getType"]>): boolean {
     if (type.isArray() || type.isTuple()) return true;
     if (type.isUnion()) return type.getUnionTypes().some((t) => t.isArray() || t.isTuple());
     return false;
+}
+
+function isPlainBinder(param: ParameterDeclaration): boolean {
+    // Destructuring, rest, and defaulted params have no plain binder, so there's no way to encode them yet.
+    if (!Node.isIdentifier(param.getNameNode())) return false; // object, array, and renamed patterns
+    if (param.isRestParameter()) return false;
+    return param.getInitializer() === undefined;
 }
 
 function reachableStatements(statements: Statement[]): Statement[] {
@@ -292,6 +299,7 @@ export function convert(node: Node, scope: Scope): string | null {
     }
 
     if (Node.isArrowFunction(node)) {
+        if (!node.getParameters().every(isPlainBinder)) return null;
         const params = node.getParameters().map((p) => p.getName());
         const body: Node = node.getBody();
 
