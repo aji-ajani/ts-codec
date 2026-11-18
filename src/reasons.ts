@@ -4,46 +4,46 @@ import {Node} from "ts-morph";
 // operator, a method name, a syntax kind) go in Rejection.detail.
 export type ReasonCode =
     // statements
-    | "braceless-then"
-    | "braceless-else"
-    | "non-boolean-if-condition"
-    | "var-decl"
-    | "multi-declarator"
-    | "destructuring-decl"
-    | "uninitialized-decl"
-    | "for-loop"
-    | "while-loop"
-    | "function-decl"
-    | "class-decl"
-    | "enum-decl"
-    | "namespace-decl"
-    | "switch-stmt"
-    | "try-stmt"
-    | "unsupported-statement"
+    | "braceless-then"            // if (c) f();
+    | "braceless-else"            // if (c) { f(); } else g();
+    | "non-boolean-if-condition"  // if (xs.length) { ... }
+    | "var-decl"                  // var x = 1;
+    | "multi-declarator"          // const a = 1, b = 2;
+    | "destructuring-decl"        // const {a, b} = obj;
+    | "uninitialized-decl"        // let x;
+    | "for-loop"                  // for (const x of xs) { ... }
+    | "while-loop"                // while (i < n) { ... }
+    | "function-decl"             // function f(x) { return x; }
+    | "class-decl"                // class Point { ... }
+    | "enum-decl"                 // enum Color { Red, Green }
+    | "namespace-decl"            // namespace Util { ... }
+    | "switch-stmt"               // switch (x) { case 1: ... }
+    | "try-stmt"                  // try { ... } catch (e) { ... }
+    | "unsupported-statement"     // label: f();  (detail: the statement kind)
     // purity
-    | "impure-assignment"
-    | "impure-callee"
-    | "impure-new"
-    | "impure-throw"
-    | "impure-await"
+    | "impure-assignment"         // x = 1;  obj.count += 1;
+    | "impure-callee"             // xs.push(1);  console.log(x);
+    | "impure-new"                // new Date()
+    | "impure-throw"              // throw new Error("bad");
+    | "impure-await"              // await fetch(url)
     // parameters
-    | "destructuring-param"
-    | "rest-param"
-    | "default-param"
+    | "destructuring-param"       // ({a, b}) => a - b
+    | "rest-param"                // (...xs) => xs
+    | "default-param"             // (a = 1) => a
     // calls
-    | "optional-chain"
-    | "unsupported-callee"
-    | "bound-method-call"
-    | "spread-arg"
-    | "array-like-receiver"
-    | "array-method-shape"
+    | "optional-chain"            // f?.(x)  a?.b.c()
+    | "unsupported-callee"        // this.f()  fs[0]()  h().g()
+    | "bound-method-call"         // (x) => x.foo()  (x is $0)
+    | "spread-arg"                // f(...xs)
+    | "array-like-receiver"       // (t: [number, number]) => t.map(f)
+    | "array-method-shape"        // xs.map(f, thisArg)  xs.reduce(f)
     // operators
-    | "unsupported-unary-op"
-    | "unary-plus-non-number"
-    | "union-operand"
-    | "equality-type"
-    | "unsupported-binary-op"
+    | "unsupported-unary-op"      // ~x  ++i
+    | "unary-plus-non-number"     // +"42"
+    | "union-operand"             // (x: string | number) => x + 1
+    | "equality-type"             // a === b  (a: boolean, or number vs string)
+    | "unsupported-binary-op"     // a ?? b  a % b
     // fallback
-    | "unsupported-expression";
+    | "unsupported-expression";   // `hi ${name}`  (detail: the expression kind)
 
 export type Rejection = {reason: ReasonCode; detail: string | null; node: Node};
