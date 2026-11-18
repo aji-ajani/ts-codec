@@ -66,18 +66,38 @@ test("a null term with no recorded rejection is reported as unrecorded", () => {
     assert.equal(entries[0].reason, "unrecorded");
 });
 
-test("parseArgs: positional semantics unchanged", () => {
-    assert.deepEqual(parseArgs([]), {inputs: ["experiments/sanity_corpus"], outputPath: "experiments/data/ts-corpus.json", reportPath: null});
-    assert.deepEqual(parseArgs(["a", "b", "out.json"]), {inputs: ["a", "b"], outputPath: "out.json", reportPath: null});
+test("parseArgs: defaults to the sanity corpus, named after it", () => {
+    assert.deepEqual(parseArgs([]), {inputs: ["experiments/corpora/sanity_corpus"], name: "sanity_corpus"});
 });
 
-test("parseArgs: --report is extracted from any position", () => {
-    assert.deepEqual(parseArgs(["--report", "r.jsonl", "a", "out.json"]), {inputs: ["a"], outputPath: "out.json", reportPath: "r.jsonl"});
-    assert.equal(parseArgs(["a", "out.json", "--report", "r.jsonl"]).reportPath, "r.jsonl");
+test("parseArgs: every positional argument is an input; names join with +", () => {
+    assert.deepEqual(
+        parseArgs(["experiments/corpora/sanity_corpus", "experiments/corpora/dsr_twins/"]),
+        {inputs: ["experiments/corpora/sanity_corpus", "experiments/corpora/dsr_twins/"], name: "sanity_corpus+dsr_twins"},
+    );
 });
 
-test("parseArgs: --report without a value throws", () => {
-    assert.throws(() => parseArgs(["a", "out.json", "--report"]), /--report requires a path/);
+test("parseArgs: a single-file input drops its .ts extension", () => {
+    assert.equal(parseArgs(["experiments/corpora/sanity_corpus_single_file.ts"]).name, "sanity_corpus_single_file");
+});
+
+test("parseArgs: --name overrides the derived name from any position", () => {
+    assert.deepEqual(parseArgs(["--name", "dsr", "a", "b"]), {inputs: ["a", "b"], name: "dsr"});
+    assert.equal(parseArgs(["a", "--name", "dsr"]).name, "dsr");
+});
+
+test("parseArgs: --name without a value throws", () => {
+    assert.throws(() => parseArgs(["a", "--name"]), /--name requires a value/);
+});
+
+test("parseArgs: unknown options, including the removed --report, throw", () => {
+    assert.throws(() => parseArgs(["a", "--report", "r.jsonl"]), /unknown option --report/);
+});
+
+test("parseArgs: a --name that is not a single folder name throws", () => {
+    for (const bad of ["a/b", "a\\b", "..", "."]) {
+        assert.throws(() => parseArgs(["a", "--name", bad]), /invalid output name/);
+    }
 });
 
 const row = (fields: Partial<ReportEntry> & Pick<ReportEntry, "path" | "outcome">): ReportEntry => ({
