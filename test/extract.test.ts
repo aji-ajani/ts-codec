@@ -1016,3 +1016,46 @@ test("optional parameters are still plain binders", () => {
 test("zero-parameter closure is unaffected by the parameter guard", () => {
     assert.equal(convert(parseExpr("() => 1 - 2"), noScope), "(lam0 (num_sub 1 2))");
 });
+
+// ts-morph's getStatements()/getText() never surface comments, so a commented
+// program must encode identically to its uncommented twin. Each test pins the literal term
+// (not just equality with the plain version) so both cannot silently regress to null together.
+const commentTwins: [string, string, string, string][] = [
+    [
+        "expression-body closure and call",
+        "const f = (x: number) => x + 1;\nf(2);",
+        "// header\n/** jsdoc */\nconst f = (/*p*/ x: number) => /* b */ x /*c*/ + 1; // trail\n// between\nf(/*arg*/ 2);\n/* end */",
+        "(define (lam1 (num_add $0 1)) (seq (app $0 2) pass))",
+    ],
+    [
+        "block-body closure",
+        "const g = (x: number) => {\n  const y = x * 2;\n  return y;\n};\ng(1);",
+        "const g = (x: number) => {\n  // inner\n  const y = x * 2; /* t */\n  return /* r */ y;\n};\ng(1);",
+        "(define (lam1 (define (num_mul $0 2) (return $0))) (seq (app $0 1) pass))",
+    ],
+    [
+        "dotted callee",
+        "Math.floor(2.5);",
+        "Math /*c*/ . /*d*/ floor(2.5);",
+        "(seq (app Math.floor 2.5) pass)",
+    ],
+    [
+        "if / else",
+        "const h = (x: number) => {\n  if (x > 0) { return 1; } else { return 2; }\n};\nh(3);",
+        "const h = (x: number) => {\n  // branch\n  if (/*c*/ x > 0) { return 1; } // then\n  else { /* e */ return 2; }\n};\nh(3);",
+        "(define (lam1 (if (num_gt $0 0) (return 1) (return 2))) (seq (app $0 3) pass))",
+    ],
+    [
+        "comment-only file",
+        "",
+        "// just a comment\n/* and a block comment */\n/** and jsdoc */",
+        "pass",
+    ],
+];
+
+for (const [name, plain, commented, expected] of commentTwins) {
+    test(`comments are ignored: ${name}`, () => {
+        assert.equal(convertProgram(parseFile(plain)), expected);
+        assert.equal(convertProgram(parseFile(commented)), expected);
+    });
+}

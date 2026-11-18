@@ -1,6 +1,26 @@
-import {Node, SyntaxKind, Statement, VariableDeclarationKind, SourceFile, IfStatement, ParameterDeclaration} from "ts-morph"
+import {Node, SyntaxKind, Statement, VariableDeclarationKind, SourceFile, IfStatement, ParameterDeclaration, ts} from "ts-morph"
 import {Scope, lookup, pushParams} from "./scope"
-import {isPure} from "./purity"
+import {findImpurity} from "./purity"
+import {ReasonCode, Rejection} from "./reasons"
+
+// The first rejection recorded since the last explainProgram call. Because no caller ever recovers from a
+// child's null, the first recorded rejection is always the one that caused the whole program to be dropped.
+let firstRejection: Rejection | null = null;
+
+function reject(reason: ReasonCode, node: Node, detail: string | null = null): null {
+    if (firstRejection === null) firstRejection = {reason, detail, node};
+    return null;
+}
+
+export type ProgramResult = {term: string; rejection: null} | {term: null; rejection: Rejection | null};
+
+// convertProgram plus why it returned null. A null term with a null rejection means some null
+// site forgot to call `reject` - an extractor bug, reported upstream as "unrecorded".
+export function explainProgram(sourceFile: SourceFile): ProgramResult {
+    firstRejection = null;
+    const term = convertProgram(sourceFile);
+    return term === null ? {term: null, rejection: firstRejection} : {term, rejection: null};
+}
 
 const ARRAY_OPS: Record<string, string> = {
     map: "array_map",
@@ -23,11 +43,24 @@ function isArrayLikeReceiver(type: ReturnType<Node["getType"]>): boolean {
     return false;
 }
 
-function isPlainBinder(param: ParameterDeclaration): boolean {
+function paramReason(param: ParameterDeclaration): ReasonCode | null {
     // Destructuring, rest, and defaulted params have no plain binder, so there's no way to encode them yet.
-    if (!Node.isIdentifier(param.getNameNode())) return false; // object, array, and renamed patterns
-    if (param.isRestParameter()) return false;
-    return param.getInitializer() === undefined;
+    if (!Node.isIdentifier(param.getNameNode())) return "destructuring-param"; // object, array, and renamed patterns
+    if (param.isRestParameter()) return "rest-param";
+    if (param.getInitializer() !== undefined) return "default-param";
+    return null;
+}
+
+function statementReason(stmt: Statement): {reason: ReasonCode; detail: string | null} {
+    if (Node.isForStatement(stmt) || Node.isForInStatement(stmt) || Node.isForOfStatement(stmt)) return {reason: "for-loop", detail: null};
+    if (Node.isWhileStatement(stmt) || Node.isDoStatement(stmt)) return {reason: "while-loop", detail: null};
+    if (Node.isFunctionDeclaration(stmt)) return {reason: "function-decl", detail: null};
+    if (Node.isClassDeclaration(stmt)) return {reason: "class-decl", detail: null};
+    if (Node.isEnumDeclaration(stmt)) return {reason: "enum-decl", detail: null};
+    if (Node.isModuleDeclaration(stmt)) return {reason: "namespace-decl", detail: null};
+    if (Node.isSwitchStatement(stmt)) return {reason: "switch-stmt", detail: null};
+    if (Node.isTryStatement(stmt)) return {reason: "try-stmt", detail: null};
+    return {reason: "unsupported-statement", detail: stmt.getKindName()};
 }
 
 function reachableStatements(statements: Statement[]): Statement[] {
@@ -35,25 +68,31 @@ function reachableStatements(statements: Statement[]): Statement[] {
     return returnIndex === -1 ? statements : statements.slice(0, returnIndex + 1);
 }
 
-function isBlockPure(statements: Statement[]): boolean {
-    return reachableStatements(statements).every(isStatementPure);
+function blockImpurity(statements: Statement[]): Rejection | null {
+    for (const stmt of reachableStatements(statements)) {
+        const hit = statementImpurity(stmt);
+        if (hit !== null) return hit;
+    }
+    return null;
 }
 
-function isStatementPure(stmt: Statement): boolean {
-    if (!Node.isIfStatement(stmt)) return isPure(stmt);
+function statementImpurity(stmt: Statement): Rejection | null {
+    if (!Node.isIfStatement(stmt)) return findImpurity(stmt);
 
-    if (!isPure(stmt.getExpression())) return false;
+    const condHit = findImpurity(stmt.getExpression());
+    if (condHit !== null) return condHit;
 
     const thenStmt = stmt.getThenStatement();
-    if (!Node.isBlock(thenStmt)) return isPure(stmt); // braceless then — conversion rejects it anyway
+    if (!Node.isBlock(thenStmt)) return findImpurity(stmt); // braceless then — conversion rejects it anyway
 
-    if (!isBlockPure(thenStmt.getStatements())) return false;
+    const thenHit = blockImpurity(thenStmt.getStatements());
+    if (thenHit !== null) return thenHit;
 
     const elseStmt = stmt.getElseStatement();
-    if (elseStmt === undefined) return true;
-    if (Node.isIfStatement(elseStmt)) return isStatementPure(elseStmt);
-    if (Node.isBlock(elseStmt)) return isBlockPure(elseStmt.getStatements());
-    return isPure(elseStmt); // braceless else — conversion rejects it anyway
+    if (elseStmt === undefined) return null;
+    if (Node.isIfStatement(elseStmt)) return statementImpurity(elseStmt);
+    if (Node.isBlock(elseStmt)) return blockImpurity(elseStmt.getStatements());
+    return findImpurity(elseStmt); // braceless else — conversion rejects it anyway
 }
 
 function convertElseBranch(stmt: Statement | undefined, scope: Scope): string | null {
@@ -63,19 +102,19 @@ function convertElseBranch(stmt: Statement | undefined, scope: Scope): string | 
 
     if (Node.isBlock(stmt)) return convertBlockStatements(stmt.getStatements(), 0, scope);
 
-    return null; // braceless else (e.g. `else foo();`) not supported
+    return reject("braceless-else", stmt); // braceless else (e.g. `else foo();`) not supported
 }
 
 function convertIfStatement(stmt: IfStatement, scope: Scope): string | null {
     const condNode = stmt.getExpression();
     const condType = condNode.getType();
-    if (!condType.isBoolean() && !condType.isBooleanLiteral()) return null; // non-boolean (incl. unions) — don't guess a truthiness coercion
+    if (!condType.isBoolean() && !condType.isBooleanLiteral()) return reject("non-boolean-if-condition", condNode); // non-boolean (incl. unions) — don't guess a truthiness coercion
 
     const cond = convert(condNode, scope);
     if (cond === null) return null;
 
     const thenStmt = stmt.getThenStatement();
-    if (!Node.isBlock(thenStmt)) return null; // braceless then (e.g. `if (c) foo();`) not supported
+    if (!Node.isBlock(thenStmt)) return reject("braceless-then", thenStmt); // braceless then (e.g. `if (c) foo();`) not supported
 
     const thenChain = convertBlockStatements(thenStmt.getStatements(), 0, scope);
     if (thenChain === null) return null;
@@ -105,16 +144,16 @@ function convertBlockStatements(statements: Statement[], index: number, scope: S
     }
 
     if (Node.isVariableStatement(stmt)) {
-        if (stmt.getDeclarationKind() === VariableDeclarationKind.Var) return null; // var not supported
+        if (stmt.getDeclarationKind() === VariableDeclarationKind.Var) return reject("var-decl", stmt); // var not supported
 
         const declarations = stmt.getDeclarations();
-        if (declarations.length !== 1) return null; // multi-declarator statements not supported
+        if (declarations.length !== 1) return reject("multi-declarator", stmt); // multi-declarator statements not supported
 
         const nameNode = declarations[0].getNameNode();
-        if (!Node.isIdentifier(nameNode)) return null; // destructuring not supported
+        if (!Node.isIdentifier(nameNode)) return reject("destructuring-decl", nameNode); // destructuring not supported
 
         const initializer = declarations[0].getInitializer();
-        if (initializer === undefined) return null; // no value to bind
+        if (initializer === undefined) return reject("uninitialized-decl", declarations[0]); // no value to bind
 
         const value = convert(initializer, scope);
         if (value === null) return null;
@@ -167,12 +206,16 @@ function convertBlockStatements(statements: Statement[], index: number, scope: S
         return `(seq ${value} ${rest})`;
     }
 
-    return null; // unsupported statement kind (for/while/throw/try/function/class/enum/namespace, ...)
+    // unsupported statement kind (for/while/try/function/class/enum/namespace, ...); throw never
+    // reaches here because the purity gate rejects it first
+    const {reason, detail} = statementReason(stmt);
+    return reject(reason, stmt, detail);
 }
 
 export function convertProgram(sourceFile: SourceFile): string | null {
     const statements = sourceFile.getStatements();
-    if (!isBlockPure(statements)) return null;
+    const impurity = blockImpurity(statements);
+    if (impurity !== null) return reject(impurity.reason, impurity.node, impurity.detail);
     return convertBlockStatements(statements, 0, []);
 }
 
@@ -184,15 +227,15 @@ function dottedSymbol(node: Node, scope: Scope): string | null {
     let current: Node = node;
 
     while (Node.isPropertyAccessExpression(current)) {
-        if (current.compilerNode.questionDotToken !== undefined) return null; // a?.b.c
+        if (current.compilerNode.questionDotToken !== undefined) return reject("optional-chain", current); // a?.b.c
         segments.unshift(current.getName());
         current = current.getExpression();
     }
 
-    if (!Node.isIdentifier(current)) return null; // this.f(), fs[0].g(), h().g() — no symbol to name
+    if (!Node.isIdentifier(current)) return reject("unsupported-callee", current, current.getKindName()); // this.f(), fs[0].g(), h().g() — no symbol to name
 
     const root = current.getText();
-    if (lookup(root, scope) !== root) return null; // bound root: "$0.foo" is not a spellable symbol
+    if (lookup(root, scope) !== root) return reject("bound-method-call", node, segments[segments.length - 1]); // bound root: "$0.foo" is not a spellable symbol
 
     return [root, ...segments].join(".");
 }
@@ -237,12 +280,12 @@ export function convert(node: Node, scope: Scope): string | null {
                 return `(num_neg ${operand})`;
             case SyntaxKind.PlusToken: {
                 const operandType = node.getOperand().getType();
-                if (operandType.isUnion()) return null; // ambiguous - don't guess
-                if (!operandType.isNumber() && !operandType.isNumberLiteral()) return null;
+                if (operandType.isUnion()) return reject("union-operand", node.getOperand()); // ambiguous - don't guess
+                if (!operandType.isNumber() && !operandType.isNumberLiteral()) return reject("unary-plus-non-number", node.getOperand());
                 return `(num_pos ${operand})`;
             }
             default:
-                return null; // other prefix unary operators not supported yet
+                return reject("unsupported-unary-op", node, ts.tokenToString(operatorToken) ?? SyntaxKind[operatorToken]); // other prefix unary operators not supported yet
         }
     }
 
@@ -263,7 +306,7 @@ export function convert(node: Node, scope: Scope): string | null {
         switch (node.getOperatorToken().getText()) {
             case "+": {
                 const leftType = node.getLeft().getType();
-                if (leftType.isUnion()) return null; // ambiguous num_add/str_concat - don't guess
+                if (leftType.isUnion()) return reject("union-operand", node.getLeft()); // ambiguous num_add/str_concat - don't guess
                 if (leftType.isString() || leftType.isStringLiteral()) return `(str_concat ${left} ${right})`;
                 return `(num_add ${left} ${right})`;
             }
@@ -284,44 +327,50 @@ export function convert(node: Node, scope: Scope): string | null {
             case "===": {
                 const leftType = node.getLeft().getType();
                 const rightType = node.getRight().getType();
-                if (leftType.isUnion() || rightType.isUnion()) return null; // ambiguous - don't guess
+                if (leftType.isUnion() || rightType.isUnion()) return reject("union-operand", node); // ambiguous - don't guess
                 if ((leftType.isNumber() || leftType.isNumberLiteral()) && (rightType.isNumber() || rightType.isNumberLiteral())) return `(num_eq ${left} ${right})`;
                 if ((leftType.isString() || leftType.isStringLiteral()) && (rightType.isString() || rightType.isStringLiteral())) return `(str_eq ${left} ${right})`;
-                return null; // mismatched or otherwise untyped operands
+                return reject("equality-type", node); // mismatched or otherwise untyped operands
             }
             case "&&":
                 return `(bool_and ${left} ${right})`;
             case "||":
                 return `(bool_or ${left} ${right})`;
             default:
-                return null; // other binary expressions not supported yet
+                return reject("unsupported-binary-op", node, node.getOperatorToken().getText()); // other binary expressions not supported yet
         }
     }
 
     if (Node.isArrowFunction(node)) {
-        if (!node.getParameters().every(isPlainBinder)) return null;
+        for (const param of node.getParameters()) {
+            const reason = paramReason(param);
+            if (reason !== null) return reject(reason, param);
+        }
         const params = node.getParameters().map((p) => p.getName());
         const body: Node = node.getBody();
 
         if (Node.isBlock(body)) {
             const statements = reachableStatements(body.getStatements());
-            if (!isBlockPure(statements)) return null; // impure closures are not DSR-eligible; dead code after `return` (including inside if-branches) is excluded
+            const impurity = blockImpurity(statements);
+            if (impurity !== null) return reject(impurity.reason, impurity.node, impurity.detail); // impure closures are not DSR-eligible; dead code after `return` (including inside if-branches) is excluded
             const inner = convertBlockStatements(statements, 0, pushParams(params, scope));
             if (inner === null) return null;
             return `(lam${params.length} ${inner})`;
         }
 
-        if (!isPure(body)) return null; // impure closures are not DSR-eligible
+        const impurity = findImpurity(body);
+        if (impurity !== null) return reject(impurity.reason, impurity.node, impurity.detail); // impure closures are not DSR-eligible
         const inner = convert(body, pushParams(params, scope));
         if (inner === null) return null; // propagate body parse failure upwards
         return `(lam${params.length} ${inner})`
     }
 
     if (Node.isCallExpression(node)) {
-        if (node.compilerNode.questionDotToken !== undefined) return null; // f?.(x)
+        if (node.compilerNode.questionDotToken !== undefined) return reject("optional-chain", node); // f?.(x)
 
         const args = node.getArguments();
-        if (args.some((arg) => Node.isSpreadElement(arg))) return null; // no DSL term for splatting an array into a parameter list
+        const spread = args.find((arg) => Node.isSpreadElement(arg));
+        if (spread !== undefined) return reject("spread-arg", spread); // no DSL term for splatting an array into a parameter list
 
         const callee = node.getExpression();
 
@@ -349,7 +398,8 @@ export function convert(node: Node, scope: Scope): string | null {
                 // This branch owns the call: the receiver is an array and the method is one
                 // it handles, so a call-shape mismatch (a thisArg, an unseeded reduce) drops
                 // the call rather than falling through to a second encoding as `app`.
-                return null;
+                if (!receiverNode.getType().isArray()) return reject("array-like-receiver", node, methodName); // tuple or union-of-array receiver
+                return reject("array-method-shape", node, methodName); // thisArg, unseeded reduce, ...
             }
         }
 
@@ -366,5 +416,5 @@ export function convert(node: Node, scope: Scope): string | null {
         return `(app ${[fn, ...encodedArgs].join(" ")})`;
     }
 
-    return null;
+    return reject("unsupported-expression", node, node.getKindName());
 }
