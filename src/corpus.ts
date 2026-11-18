@@ -2,7 +2,7 @@ import {Project, SourceFile, ts} from "ts-morph";
 import * as fs from "fs";
 import * as path from "path";
 import {explainProgram, ProgramResult} from "./extract";
-import {ReportEntry, snippetOf} from "./report";
+import {formatSummary, ReportEntry, snippetOf, toJsonl} from "./report";
 
 // Rough AST-size proxy: every operator and every leaf is one whitespace/paren-
 // delimited token, so counting tokens approximates counting term nodes
@@ -39,8 +39,8 @@ export function buildCorpus(
     const entries: ReportEntry[] = [];
 
     for (const filePath of inputPaths.flatMap(collectTsFiles)) {
-        const entry = (fields: Partial<ReportEntry> & Pick<ReportEntry, "outcome">) =>
-            entries.push({path: filePath, ...EMPTY_ENTRY, ...fields});
+        const entry = ({outcome, ...fields}: Partial<ReportEntry> & Pick<ReportEntry, "outcome">) =>
+            entries.push({path: filePath, outcome, ...EMPTY_ENTRY, ...fields});
 
         try {
             const file = project.addSourceFileAtPath(filePath);
@@ -91,17 +91,43 @@ export function buildCorpus(
     return {corpus, entries};
 }
 
-function main() {
-    const inputs = process.argv.length > 2 ? process.argv.slice(2, -1) : ["experiments/sanity_corpus"];
-    const outputPath = process.argv.length > 3 ? process.argv[process.argv.length - 1] : "experiments/data/ts-corpus.json";
+// `argv` is process.argv.slice(2). `--report <path>` may appear anywhere; the remaining
+// arguments keep the original positional meaning (inputs..., output last).
+export function parseArgs(argv: string[]): {inputs: string[]; outputPath: string; reportPath: string | null} {
+    const rest: string[] = [];
+    let reportPath: string | null = null;
 
-    const {corpus} = buildCorpus(inputs);
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] !== "--report") {
+            rest.push(argv[i]);
+            continue;
+        }
+        if (i + 1 >= argv.length) throw new Error("--report requires a path");
+        reportPath = argv[++i];
+    }
+
+    const inputs = rest.length > 0 ? rest.slice(0, -1) : ["experiments/sanity_corpus"];
+    const outputPath = rest.length > 1 ? rest[rest.length - 1] : "experiments/data/ts-corpus.json";
+    return {inputs, outputPath, reportPath};
+}
+
+function main() {
+    const {inputs, outputPath, reportPath} = parseArgs(process.argv.slice(2));
+
+    const {corpus, entries} = buildCorpus(inputs);
 
     fs.mkdirSync(path.dirname(outputPath), {recursive: true});
     fs.writeFileSync(outputPath, JSON.stringify(corpus, null, 4));
 
     console.log(`Wrote ${corpus.length} programs to ${outputPath}`);
     for (const entry of corpus) console.log(`  ${entry}`);
+
+    if (reportPath !== null) {
+        fs.mkdirSync(path.dirname(reportPath), {recursive: true});
+        fs.writeFileSync(reportPath, toJsonl(entries));
+        console.log(`Wrote report for ${entries.length} files to ${reportPath}`);
+        process.stdout.write(formatSummary(entries));
+    }
 }
 
 if (require.main === module) main();
