@@ -133,6 +133,9 @@ export function parseArgs(argv: string[]): {inputs: string[]; name: string} {
 }
 
 function main() {
+    // Optional .env loaded only here, never in tests; variables already set in the shell take precedence.
+    try { process.loadEnvFile(); } catch {}
+
     const {inputs, name} = parseArgs(process.argv.slice(2));
 
     const {corpus, entries} = buildCorpus(inputs);

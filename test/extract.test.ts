@@ -1059,3 +1059,52 @@ for (const [name, plain, commented, expected] of commentTwins) {
         assert.equal(convertProgram(parseFile(commented)), expected);
     });
 }
+
+// TS_CODEC_ALLOW_IMPURE=1 disables the purity gate; impure code then hits the converter's ordinary rejections.
+function withImpureAllowed(fn: () => void): void {
+    const previous = process.env.TS_CODEC_ALLOW_IMPURE;
+    process.env.TS_CODEC_ALLOW_IMPURE = "1";
+    try {
+        fn();
+    } finally {
+        if (previous === undefined) delete process.env.TS_CODEC_ALLOW_IMPURE;
+        else process.env.TS_CODEC_ALLOW_IMPURE = previous;
+    }
+}
+
+test("purity gate disabled: console.log in an expression-body arrow encodes as app", () => {
+    withImpureAllowed(() => {
+        assert.equal(convert(parseExpr("(x) => console.log(x)"), noScope), "(lam1 (app console.log $0))");
+    });
+});
+
+test("purity gate disabled: console.log in a block body encodes as seq", () => {
+    withImpureAllowed(() => {
+        assert.equal(
+            convert(parseExpr("(x) => { console.log(x); return x; }"), noScope),
+            "(lam1 (seq (app console.log $0) (return $0)))"
+        );
+    });
+});
+
+test("purity gate disabled: impure top-level file converts", () => {
+    withImpureAllowed(() => {
+        assert.equal(
+            convertProgram(parseFile("console.log(1);\nconst a = 1;")),
+            "(seq (app console.log 1) (define 1 pass))"
+        );
+    });
+});
+
+test("purity gate disabled: constructs the converter cannot encode are still rejected", () => {
+    withImpureAllowed(() => {
+        assert.equal(convertProgram(parseFile("let x = 1;\nx = 2;")), null);
+        assert.equal(convertProgram(parseFile("const s = new Set();")), null);
+        assert.equal(convert(parseExpr("() => { throw 1; }"), noScope), null);
+    });
+});
+
+test("purity gate is on by default", () => {
+    assert.equal(process.env.TS_CODEC_ALLOW_IMPURE, undefined);
+    assert.equal(convert(parseExpr("(x) => console.log(x)"), noScope), null);
+});

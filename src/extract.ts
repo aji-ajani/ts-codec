@@ -68,7 +68,14 @@ function reachableStatements(statements: Statement[]): Statement[] {
     return returnIndex === -1 ? statements : statements.slice(0, returnIndex + 1);
 }
 
+// TS_CODEC_ALLOW_IMPURE=1 skips the purity gate, so impure code falls through
+// to the encoder's ordinary rejections instead. Purity gating is enabled by default.
+function purityGateEnabled(): boolean {
+    return process.env.TS_CODEC_ALLOW_IMPURE !== "1";
+}
+
 function blockImpurity(statements: Statement[]): Rejection | null {
+    if (!purityGateEnabled()) return null;
     for (const stmt of reachableStatements(statements)) {
         const hit = statementImpurity(stmt);
         if (hit !== null) return hit;
@@ -206,8 +213,8 @@ function convertBlockStatements(statements: Statement[], index: number, scope: S
         return `(seq ${value} ${rest})`;
     }
 
-    // unsupported statement kind (for/while/try/function/class/enum/namespace, ...); throw never
-    // reaches here because the purity gate rejects it first
+    // unsupported statement kind (for/while/try/function/class/enum/namespace, ...); throw only
+    // reaches here when the purity gate is disabled.
     const {reason, detail} = statementReason(stmt);
     return reject(reason, stmt, detail);
 }
@@ -358,7 +365,7 @@ export function convert(node: Node, scope: Scope): string | null {
             return `(lam${params.length} ${inner})`;
         }
 
-        const impurity = findImpurity(body);
+        const impurity = purityGateEnabled() ? findImpurity(body) : null;
         if (impurity !== null) return reject(impurity.reason, impurity.node, impurity.detail); // impure closures are not DSR-eligible
         const inner = convert(body, pushParams(params, scope));
         if (inner === null) return null; // propagate body parse failure upwards
