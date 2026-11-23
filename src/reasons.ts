@@ -8,7 +8,6 @@ export type ReasonCode =
     | "braceless-else"            // if (c) { f(); } else g();
     | "non-boolean-if-condition"  // if (xs.length) { ... }
     | "var-decl"                  // var x = 1;
-    | "multi-declarator"          // const a = 1, b = 2;
     | "destructuring-decl"        // const {a, b} = obj;
     | "uninitialized-decl"        // let x;
     | "for-loop"                  // for (const x of xs) { ... }

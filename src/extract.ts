@@ -1,4 +1,4 @@
-import {Node, SyntaxKind, Statement, VariableDeclarationKind, SourceFile, IfStatement, ParameterDeclaration, ts} from "ts-morph"
+import {Node, SyntaxKind, Statement, VariableStatement, VariableDeclarationKind, SourceFile, IfStatement, ParameterDeclaration, ts} from "ts-morph"
 import {Scope, lookup, pushParams} from "./scope"
 import {findImpurity} from "./purity"
 import {ReasonCode, Rejection} from "./reasons"
@@ -132,6 +132,30 @@ function convertIfStatement(stmt: IfStatement, scope: Scope): string | null {
     return `(if ${cond} ${thenChain} ${elseChain})`;
 }
 
+// `const a = e1, b = e2; rest` is sugar for `const a = e1; const b = e2; rest`
+function convertVariableStatement(stmt: VariableStatement, statements: Statement[], index: number, scope: Scope): string | null {
+    if (stmt.getDeclarationKind() === VariableDeclarationKind.Var) return reject("var-decl", stmt); // var not supported
+
+    const values: string[] = [];
+    for (const declaration of stmt.getDeclarations()) {
+        const nameNode = declaration.getNameNode();
+        if (!Node.isIdentifier(nameNode)) return reject("destructuring-decl", nameNode); // destructuring not supported
+
+        const initializer = declaration.getInitializer();
+        if (initializer === undefined) return reject("uninitialized-decl", declaration); // no value to bind
+
+        const value = convert(initializer, scope);
+        if (value === null) return null;
+
+        values.push(value);
+        scope = pushParams([nameNode.getText()], scope);
+    }
+
+    const rest = convertBlockStatements(statements, index + 1, scope);
+    if (rest === null) return null;
+    return values.reduceRight((acc, value) => `(define ${value} ${acc})`, rest);
+}
+
 function convertBlockStatements(statements: Statement[], index: number, scope: Scope): string | null {
     if (index === statements.length) return "pass"; // ran out of statements — no explicit return
 
@@ -150,25 +174,7 @@ function convertBlockStatements(statements: Statement[], index: number, scope: S
         return `(return ${value})`;
     }
 
-    if (Node.isVariableStatement(stmt)) {
-        if (stmt.getDeclarationKind() === VariableDeclarationKind.Var) return reject("var-decl", stmt); // var not supported
-
-        const declarations = stmt.getDeclarations();
-        if (declarations.length !== 1) return reject("multi-declarator", stmt); // multi-declarator statements not supported
-
-        const nameNode = declarations[0].getNameNode();
-        if (!Node.isIdentifier(nameNode)) return reject("destructuring-decl", nameNode); // destructuring not supported
-
-        const initializer = declarations[0].getInitializer();
-        if (initializer === undefined) return reject("uninitialized-decl", declarations[0]); // no value to bind
-
-        const value = convert(initializer, scope);
-        if (value === null) return null;
-
-        const rest = convertBlockStatements(statements, index + 1, pushParams([nameNode.getText()], scope));
-        if (rest === null) return null;
-        return `(define ${value} ${rest})`;
-    }
+    if (Node.isVariableStatement(stmt)) return convertVariableStatement(stmt, statements, index, scope);
 
     if (Node.isExpressionStatement(stmt)) {
         const value = convert(stmt.getExpression(), scope);

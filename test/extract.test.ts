@@ -135,10 +135,52 @@ test("block body with destructured const returns null", () => {
     );
 });
 
-test("block body with multi-declarator const returns null", () => {
+test("block body with multi-declarator const encodes as nested defines", () => {
     assert.equal(
-        convert(parseExpr("(x) => { const a = 1, b = 2; return a + b; }"), noScope),
-        null
+        convert(parseExpr("(x) => { const a = 1, b = 2; return a - b; }"), noScope),
+        "(lam1 (define 1 (define 2 (return (num_sub $1 $0)))))"
+    );
+});
+
+test("multi-declarator encodes identically to separate statements", () => {
+    const multi = convert(parseExpr("(x) => { const a = x + 1, b = a * 2; return b - a; }"), noScope);
+    const separate = convert(parseExpr("(x) => { const a = x + 1; const b = a * 2; return b - a; }"), noScope);
+    assert.equal(multi, "(lam1 (define (num_add $0 1) (define (num_mul $0 2) (return (num_sub $0 $1)))))");
+    assert.equal(multi, separate);
+});
+
+test("three declarators index outward past the lam parameter", () => {
+    assert.equal(
+        convert(parseExpr("(x) => { const a = x, b = 2, c = a - b; return c - x; }"), noScope),
+        "(lam1 (define $0 (define 2 (define (num_sub $1 $0) (return (num_sub $0 $3))))))"
+    );
+});
+
+test("multi-declarator let with type annotations", () => {
+    assert.equal(
+        convert(parseExpr("(x) => { let a: number = 1, b: number = 2; return a - b; }"), noScope),
+        "(lam1 (define 1 (define 2 (return (num_sub $1 $0)))))"
+    );
+});
+
+test("multi-declarator with a destructured declarator returns null", () => {
+    assert.equal(convert(parseExpr("(o) => { const a = 1, {b} = o; return a; }"), noScope), null);
+});
+
+test("multi-declarator at file top level", () => {
+    assert.equal(
+        convertProgram(parseFile("const a = 1, b = 2;\nf(a - b);")),
+        "(define 1 (define 2 (seq (app f (num_sub $1 $0)) pass)))"
+    );
+});
+
+// Known gap: see the vault's design-decisions/gaps.md, "Forward references to a block-scoped
+// name (TDZ)". JS throws here (inner x is in its TDZ); the encoding reads the outer x. Pinned so
+// that changing this is a deliberate decision.
+test("known gap: forward reference within a multi-declarator resolves to the outer binding", () => {
+    assert.equal(
+        convertProgram(parseFile("const x = 10;\nconst f = () => { const a = x, x = 2; return a; };")),
+        "(define 10 (define (lam0 (define $0 (define 2 (return $1)))) pass))"
     );
 });
 
@@ -887,6 +929,13 @@ test("export const is still recognized as a VariableStatement", () => {
     assert.equal(
         convertProgram(parseFile("export const x = 1;\nx + 1;")),
         "(define 1 (seq (num_add $0 1) pass))"
+    );
+});
+
+test("export const with multiple declarators", () => {
+    assert.equal(
+        convertProgram(parseFile("export const a = 1, b = 2;\na - b;")),
+        "(define 1 (define 2 (seq (num_sub $1 $0) pass)))"
     );
 });
 
